@@ -1,0 +1,616 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{array}
+
+\geometry{margin=2.2cm, top=2.8cm, bottom=2.8cm}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black,
+            urlcolor=blue!60!black, citecolor=blue!60!black}
+
+\titleformat{\section}{\large\bfseries}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\itshape\bfseries}{\thesubsubsection}{0.8em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small HOT Exercises --- SSPC 2026}
+\lhead{\small Sneha Chakrabarti, IISER Kolkata}
+\cfoot{\thepage}
+
+\newcommand{\widefig}[3]{%
+  \begin{figure}[H]
+    \centering
+    \includegraphics[width=#1\linewidth]{#2}
+    \caption{#3}
+  \end{figure}}
+
+\title{\textbf{Wavefront Engineering and Holographic Optical Tweezers}\\
+\large Computational Exercises --- Complete Summary Report\\[0.5em]
+\normalsize Based on Jones, Maragò \& Volpe,
+\textit{Optical Tweezers: Principles and Applications}, Ch.~11}
+\author{Sneha Chakrabarti\\
+\small IISER Kolkata, 3rd Year BS-MS \quad|\quad
+SSPC 2026, IISER Pune \quad|\quad
+Guide: Dr Vijayakumar Chikkadi}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Overview and Physical Background}
+
+This report documents all computational exercises completed during SSPC 2026
+at IISER Pune, covering Chapter~11 of Jones, Maragò \& Volpe.
+The work spans three groups: earlier exercises (11.2.1--11.2.10) implementing
+fundamental SLM phase masks and early hologram algorithms on a $512\times512$
+simulated SLM; main exercises (11.2.11--11.4.3) implementing the full algorithm
+suite on the standard $1000\times1000$ benchmark; and the problem set
+(11.1--11.3) covering genetic algorithms, optical vortex topology,
+and fractional vortices.
+
+\subsection{Setup and notation}
+
+A spatial light modulator (SLM) conjugated to the back focal plane of a
+microscope objective acts as a reconfigurable diffractive optical element (DOE).
+The trapping plane sees the Fourier transform of the SLM exit field:
+\begin{equation}
+  E_\text{focus}(x,y)
+  = \frac{4\pi^2 e^{2ik_0 f}}{i\lambda_0 f}
+    \,\hat{E}_\text{DOE}\!\left(\frac{x}{\lambda_0 f},\frac{y}{\lambda_0 f}\right).
+\end{equation}
+Hologram design is a Fourier phase-retrieval problem. The normalised complex
+efficiency at trap site $n$ is
+\begin{equation}
+  V(x_n,y_n,z_n) = \frac{1}{M}\sum_{m} e^{i[\phi_m - \Delta_m(x_n,y_n,z_n)]},
+\end{equation}
+where the steering phase
+$\Delta_m = (2\pi/\lambda_0 f)(x_m x_n + y_m y_n) + (\pi z_n/\lambda_0 f^2)(x_m^2+y_m^2)$
+encodes lateral displacement (blazed grating) and axial shift (Fresnel lens).
+Trap power satisfies $P_n/P_\text{total} = |V_n|^2 \leq 1$.
+
+\subsection{Standard benchmark}
+
+All Section~11.2 exercises use a $1000\times1000$ SLM, $N=100$ traps on a
+$10\times10$ square lattice at $z=0$, Gaussian laser ($1/e^2$ radius
+$=400$\,px), 15\% lattice margin, and seed \texttt{numpy.random.default\_rng(42)}.
+Performance is tracked by uniformity
+$u = 1 - (\max I_n - \min I_n)/(\max I_n + \min I_n)$
+and percentage standard error $\sigma = 100\,\mathrm{std}(I_n)/\langle I\rangle$.
+
+\section{Earlier Exercises (11.2.1--11.2.10): Fundamental Phase Masks}
+
+Implemented on a $512\times512$ SLM, Gaussian laser ($1/e^2$ radius
+$=200$\,px). Gratings parameterised by period $T$ in SLM pixels;
+period $T$ deflects the first-order spot to FFT bin $\pm N/T$.
+
+\subsection{Ex 11.2.1 --- Focal-plane intensity from basic phase masks}
+
+Four mask types: flat phase (on-axis spot), grating only (two symmetric
+first-order spots), Fresnel lens only (defocused at $z=0$), grating plus
+Fresnel lens (lateral and axial displacement). A binary alternating-row
+grating ($0/\pi$, period 8\,px) places both first-order spots at $\pm64$ bins
+with exactly zero DC.
+
+Key result: grating period must be $\geq 4$\,px to avoid Nyquist aliasing;
+period 2 aliases both spots to the same bin.
+
+\subsection{Ex 11.2.4 --- Random Mask Encoding (RM)}
+
+Each pixel assigned the steering phase for one randomly chosen trap.
+Efficiency $\propto 1/N$. Fast but poor for large $N$.
+
+\subsection{Ex 11.2.5 --- Superposition of Gratings and Lenses (SGL)}
+
+$\phi^\text{SGL} = \arg(\sum_n e^{i\phi^{(s)}_n})$.
+Every pixel contributes to every trap. Better efficiency than RM,
+typically worse uniformity.
+
+\subsection{Ex 11.2.6--11.2.7 --- Weighted RM and Weighted SGL}
+
+Pixel assignment probabilities (RM) or coherent-sum weights (SGL)
+proportional to $\sqrt{I_\text{target}(n)}$. Moderate uniformity improvement.
+
+\subsection{Ex 11.2.10 --- Algorithm comparison}
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Algorithm & Speed & Efficiency & Uniformity & Notes \\
+\midrule
+RM & Fast & $\propto 1/N$ & Moderate & Single pass \\
+SGL & Fast & Moderate & Poor & Single pass \\
+GS & Medium & Good & Moderate & Iterative \\
+AA & Medium & Good & Good & GS + mixing \\
+DS & Slow & Tunable & Tunable & Refinement \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Main Exercises (11.2.11--11.2.17): Iterative Algorithms}
+
+\subsection{Ex 11.2.11 --- Standard Gerchberg-Saxton}
+
+Per iteration: (1) forward FFT; (2) replace amplitude at trap sites with
+$\sqrt{I_\text{target}}$, keep phase; (3) inverse FFT; (4) replace SLM
+amplitude with laser profile, keep phase.
+60 iterations on the standard benchmark yields $u=1.000$, $\sigma=0\%$.
+
+\widefig{0.97}{ex11_2_11/figures/fig1_gs_convergence.png}{%
+  \textbf{Ex 11.2.11.} Convergence of all four metrics over 60 GS iterations.
+  Uniformity and $\sigma$ reach optimal values within $\sim$30 iterations.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_11/figures/fig2_slm_hologram.png}
+  \caption{Final SLM phase hologram.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_11/figures/fig3_focal_intensity.png}
+  \caption{Focal-plane intensity (log scale) with trap overlay.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.11.} GS hologram and focal pattern after 60 iterations.}
+\end{figure}
+
+\widefig{0.72}{ex11_2_11/figures/fig4_trap_uniformity.png}{%
+  \textbf{Ex 11.2.11.} Normalised per-trap intensity $I_n/\langle I\rangle$.
+  All traps within $\pm2\%$ of the mean ($u=1.000$, $\sigma=0.00\%$).}
+
+\subsection{Ex 11.2.12 --- Sparse GS}
+
+Replace the FFT with a direct DFT matrix $\mathbf{W}$ evaluated only at $N$
+trap frequencies; back-propagation uses $\mathbf{W}^\dagger$.
+Faster than FFT only when $N < \log_2 M \approx 20$ for a $1000\times1000$
+grid; at $N=100$ the FFT wins.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_12/figures/fig1_sparse_vs_standard_convergence.png}
+  \caption{Convergence: sparse vs standard GS.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_12/figures/fig2_timing_vs_N.png}
+  \caption{Wall-clock time vs $N$ (512$\times$512 timing grid).}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.12.} Identical convergence; sparse is faster only at small $N$.}
+\end{figure}
+
+\subsection{Ex 11.2.13 --- Weighted GS}
+
+After each forward pass:
+$A_\text{target}^{(k)}(n) = A_\text{target}^{(k-1)}(n)\cdot(\langle I\rangle/I_n^{(k-1)})^\alpha$.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_13/figures/fig1_wgs_uniformity.png}
+  \caption{$u$ and $\sigma$ for $\alpha\in\{0.2,0.5,1.0\}$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_13/figures/fig2_per_trap_comparison.png}
+  \caption{Per-trap bars: standard GS vs best WGS.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.13.} All $\alpha$ values converge to $u=1$ on the
+  standard lattice. $\alpha=0.5$ is the most stable.}
+\end{figure}
+
+\subsection{Ex 11.2.14 --- Multi-plane and 3D GS}
+
+Propagation to axially displaced plane uses the Fresnel transfer function
+$H(k_x,k_y;z) = \exp(i\pi z(k_x^2+k_y^2)/M_xM_y)$.
+Per iteration: propagate to each plane, replace amplitude, back-propagate,
+\textbf{sum} at SLM, apply laser constraint.
+Grid reduced to $256\times256$ for CPU tractability.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_14/figures/fig1_multiplane_convergence.png}
+  \caption{Convergence per plane ($P=3$).}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_14/figures/fig2_multiplane_focal_fields.png}
+  \caption{Focal intensity at each target plane.}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_14/figures/fig3_gs3d_convergence.png}
+  \caption{3D GS: 8-trap cube.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_14/figures/fig4_3d_trap_geometry.png}
+  \caption{Cube trap geometry.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.14.} Multi-plane and 3D GS on $256\times256$ SLM.}
+\end{figure}
+
+\subsection{Ex 11.2.15 --- Adaptive-Additive Algorithm}
+
+$E_\text{new}[n] = (1-a)\,E_\text{current}[n] + a\,A_\text{target}\,e^{i\angle E_\text{current}[n]}$.
+Setting $a=1$ recovers GS. All $a\geq0.5$ reach $u=1$, $\sigma=0$ in 60 iterations.
+
+\widefig{0.97}{ex11_2_15/figures/fig1_aa_convergence.png}{%
+  \textbf{Ex 11.2.15.} AA convergence for $a\in\{0.1,0.25,0.5,0.75,1.0\}$.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_15/figures/fig5_slm_hologram_aa.png}
+  \caption{SLM phase hologram (best AA, $a=0.75$).}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_15/figures/fig6_focal_intensity_aa.png}
+  \caption{Focal-plane intensity.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.15.} AA hologram and focal pattern.}
+\end{figure}
+
+\subsection{Ex 11.2.16 --- Direct Search (Cizmar 2010)}
+
+SLM divided into $N_\text{seg}^2$ macro-segments. Each segment cycled through
+$K$ grey levels; retain phase maximising $I(x_0)$. No wavefront sensor needed.
+Simulated annealing added for local-optima escape.
+Result: 94\% of diffraction-limited intensity recovered from a
+random Zernike aberration (RMS $\approx1.5$\,rad).
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_16/figures/fig1_ds_convergence.png}
+  \caption{$I(x_0)$ vs segment update.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_16/figures/fig2_focal_maps.png}
+  \caption{Focal maps: ideal / aberrated / DS / DS+anneal.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.16.} Direct search optimal focusing.}
+\end{figure}
+
+\subsection{Ex 11.2.17 --- Zernike Aberration Correction}
+
+$\phi_\text{corrected} = [\phi_\text{hologram} - \sum_j c_j Z_j(\rho,\varphi)]\bmod 2\pi$.
+Strehl ratio: $0.215$ (aberrated) $\to$ $1.000$ (fully corrected).
+Progressive correction is monotonically improving.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_17/figures/fig1_focal_maps.png}
+  \caption{Focal maps: ideal / aberrated / corrected.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_17/figures/fig2_progressive_correction.png}
+  \caption{Strehl and intensity vs Zernike terms added.}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_17/figures/fig3_individual_corrections.png}
+  \caption{Strehl from single-term corrections.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_2_17/figures/fig4_defocus_scan.png}
+  \caption{Sensitivity to defocus coefficient.}
+\end{subfigure}
+\caption{\textbf{Ex 11.2.17.} Zernike aberration correction results.}
+\end{figure}
+
+\widefig{0.97}{ex11_2_17/figures/fig5_slm_phases.png}{%
+  \textbf{Ex 11.2.17.} SLM phase patterns: aberration, correction (mod $2\pi$),
+  combined hologram.}
+
+\section{Structured Beams (11.3.1--11.3.4)}
+
+\subsection{Ex 11.3.1 --- Laguerre-Gaussian Beams}
+
+Phase mask for $\mathrm{LG}_p^l$:
+\begin{equation}
+  \phi(\rho,\varphi) = l\varphi
+  + \pi\,\Theta\!\left\{L_p^{|l|}\!\left(\tfrac{2\rho^2}{w_0^2}\right)\right\}.
+\end{equation}
+Blazed grating superimposed to shift beam off DC spot.
+
+\widefig{0.97}{ex11_3_1/figures/fig1_lg_phase_masks.png}{%
+  \textbf{Ex 11.3.1.} SLM phase masks for six LG modes.}
+
+\widefig{0.97}{ex11_3_1/figures/fig2_lg_focal_intensity.png}{%
+  \textbf{Ex 11.3.1.} Focal-plane intensity for the same six modes.
+  Doughnut radius grows with $|l|$; ring count with $p$.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_3_1/figures/fig3_oam_sign.png}
+  \caption{Phase winding: $l=+2$ vs $l=-2$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_3_1/figures/fig4_radial_structure.png}
+  \caption{Radial structure: $l=2$, $p=0$ to $5$.}
+\end{subfigure}
+\caption{\textbf{Ex 11.3.1.} OAM sign visible in winding direction;
+  radial index $p$ adds one ring per unit.}
+\end{figure}
+
+\subsection{Ex 11.3.2 --- Hermite-Gaussian Beams}
+
+Binary SLM phase mask:
+\begin{equation}
+  \phi(x,y) = \pi\,\Theta\!\left\{
+    H_{m_x}\!\left(\tfrac{\sqrt{2}\,x}{w_0}\right)
+    H_{m_y}\!\left(\tfrac{\sqrt{2}\,y}{w_0}\right)\right\}.
+\end{equation}
+
+\widefig{0.97}{ex11_3_2/figures/fig1_hg_phase_masks.png}{%
+  \textbf{Ex 11.3.2.} Binary phase masks for HG modes with $m_x+m_y\leq4$.}
+
+\widefig{0.97}{ex11_3_2/figures/fig2_hg_focal_intensity.png}{%
+  \textbf{Ex 11.3.2.} Focal intensity: $(m_x+1)(m_y+1)$ rectangular lobes.}
+
+\widefig{0.80}{ex11_3_2/figures/fig3_hg_demo.png}{%
+  \textbf{Ex 11.3.2.} $\mathrm{HG}_{3,2}$: Hermite product, binary mask,
+  focal intensity ($4\times3=12$ lobes).}
+
+\subsection{Ex 11.3.4 --- Counter-Rotating Optical Traps}
+
+$\phi_\text{SGL} = \arg(\sum_n e^{i\phi_n})$ with charges $\pm l$.
+Opposite-OAM particles orbit in opposite directions.
+
+\widefig{0.97}{ex11_3_4/figures/fig1_counter_rotating_pairs.png}{%
+  \textbf{Ex 11.3.4.} Counter-rotating pairs with $l=1,2,3$.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_3_4/figures/fig2_quad_array.png}
+  \caption{$2\times2$ quad array ($l=\pm2$).}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_3_4/figures/fig4_focal_phase_winding.png}
+  \caption{Focal-field phase: opposite winding for $\pm l$.}
+\end{subfigure}
+\caption{\textbf{Ex 11.3.4.} Quad array and phase winding maps.}
+\end{figure}
+
+\section{Continuous Optical Potentials (11.4.1--11.4.3)}
+
+\subsection{Ex 11.4.1 --- Continuous Potentials via GS}
+
+Amplitude replacement applied over the full focal field.
+Target power-normalised via Parseval's theorem:
+$A_t = A_\text{target}\sqrt{\|E_\text{SLM}\|^2 M_x M_y/\|A_\text{target}\|^2}$.
+
+\widefig{0.97}{ex11_4_1/figures/fig1_sp_target_vs_achieved.png}{%
+  \textbf{Ex 11.4.1.} Target, achieved intensity, and SLM phase for four
+  continuous patterns on $1000\times1000$ SLM (80 iterations).}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_1/figures/fig2_sp_convergence.png}
+  \caption{Single-plane: $C/C_0$ vs iteration.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_1/figures/fig4_mp_convergence.png}
+  \caption{Multi-plane per-plane convergence ($256\times256$).}
+\end{subfigure}
+\caption{\textbf{Ex 11.4.1.} Convergence: most reduction in first 15 iterations.}
+\end{figure}
+
+\widefig{0.97}{ex11_4_1/figures/fig3_mp_target_vs_achieved.png}{%
+  \textbf{Ex 11.4.1.} Multi-plane GS: target vs achieved at three planes.}
+
+\subsection{Ex 11.4.2 --- Proof: $C$ is Non-Increasing Under GS}
+
+$C = \sum_{x,y}(|E_\text{focus}| - A_t)^2$.
+Each iteration consists of two alternating projections onto closed convex sets:
+step~2 projects onto $S_2 = \{E : |E| = A_t\}$ (setting $C=0$);
+step~4 projects onto $S_1 = \{E : |E_\text{SLM}| = A_\text{laser}\}$.
+The alternating-projections theorem guarantees $C^{(k+1)} \leq C^{(k)}$.
+Parseval normalisation of $A_t$ is essential; per-iteration rescaling
+breaks monotonicity.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_2/figures/fig1_C_monotone.png}
+  \caption{$C^{(k)}$ and $\Delta C^{(k)}$: all decrements $\leq 0$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_2/figures/fig2_deltaC_histogram.png}
+  \caption{Histogram of $\Delta C^{(k)}$: all values $\leq0$.}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_2/figures/fig3_seed_independence.png}
+  \caption{Three seeds: monotonicity holds for each.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_2/figures/fig4_fractional_reduction.png}
+  \caption{Fractional reduction $\Delta C/C_0$ per iteration.}
+\end{subfigure}
+\caption{\textbf{Ex 11.4.2.} Zero violations across 4 targets and 3 seeds,
+  100 iterations, $1000\times1000$ SLM.}
+\end{figure}
+
+\subsection{Ex 11.4.3 --- Continuous Potentials via AA}
+
+$E_\text{new}(x,y) = (1-a)E_\text{current} + a A_t e^{i\angle E_\text{current}}$.
+For continuous potentials, GS ($a=1$) converges to lower $C$ than AA ($a<1$)
+at equal iteration count: the continuous projection leaves no discrete local
+traps for mixing to help escape.
+
+\widefig{0.97}{ex11_4_3/figures/fig1_aa_vs_gs_convergence.png}{%
+  \textbf{Ex 11.4.3.} AA vs GS on ring target: GS wins for continuous potentials.}
+
+\widefig{0.97}{ex11_4_3/figures/fig2_aa_target_vs_achieved.png}{%
+  \textbf{Ex 11.4.3.} Target vs achieved for four patterns using AA $a=0.5$.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_3/figures/fig4_mp_aa_vs_gs.png}
+  \caption{Multi-plane AA vs GS per plane.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{ex11_4_3/figures/fig5_mp_aa_achieved.png}
+  \caption{Multi-plane AA achieved intensity.}
+\end{subfigure}
+\caption{\textbf{Ex 11.4.3.} Multi-plane AA and GS both reduce $C$ by
+  $\sim$95\% from $C_0$ in 40 iterations.}
+\end{figure}
+
+\section{Problem Set (11.1--11.3)}
+
+\subsection{Problem 11.1 --- Genetic Algorithm}
+
+Fitness $F_\text{gain} = \langle I\rangle - w\sigma$ ($w=0.5$);
+population $P=20$; tournament selection; pixel-wise crossover;
+decaying mutation rate ($0.04\to0.004$); 50 generations.
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+Algorithm & $u$ & $\sigma$\,(\%) & $\langle I\rangle$ & Time \\
+\midrule
+GA ($P=20$, 50\,gen) & 0.005 & 69 & 2.57 & 100\,s \\
+GS (50\,iter) & 1.000 & 0.00 & 0.010 & 6\,s \\
+AA $a=0.5$ (50\,iter) & 1.000 & 0.00 & 0.010 & 6\,s \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+GS achieves perfect uniformity 17$\times$ faster. The GA under-penalises
+non-uniformity at $w=0.5$ and its local-optima-escape advantage is not
+needed for the essentially convex GS landscape of this lattice.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_1/figures/fig1_ga_convergence.png}
+  \caption{Convergence: GA vs GS vs AA.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_1/figures/fig2_per_trap_comparison.png}
+  \caption{Per-trap intensity: all three algorithms.}
+\end{subfigure}
+\caption{\textbf{Problem 11.1.} GA vs GS vs AA comparison.}
+\end{figure}
+
+\subsection{Problem 11.2 --- Optical Vortex Pair}
+
+$E(x,y) = E_G(x,y)\cdot e^{il_1\arctan(y/(x-d))}\cdot e^{il_2\arctan(y/(x+d))}$.
+Vortex positions detected via phase winding numbers on a grid.
+
+\widefig{0.97}{prob11_2/figures/fig1_same_sign_evolution.png}{%
+  \textbf{Problem 11.2A.} Same-sign pair ($+l,+l$): intensity and phase
+  as $d$ decreases from 280 to 0\,px. Singularities merge at $d=0$.}
+
+\widefig{0.97}{prob11_2/figures/fig2_opposite_sign_evolution.png}{%
+  \textbf{Problem 11.2B.} Opposite-sign pair ($+l,-l$): annihilation at $d=0$.}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_2/figures/fig4_radial_profiles.png}
+  \caption{Intensity zeros move as $d\to0$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_2/figures/fig5_total_charge.png}
+  \caption{Total charge $Q$: conserved throughout.}
+\end{subfigure}
+\caption{\textbf{Problem 11.2.} Topological charge is conserved:
+  $Q=+2$ (same-sign) and $Q=0$ (opposite-sign) throughout.}
+\end{figure}
+
+\subsection{Problem 11.3 --- Fractional Optical Vortices (Berry 2004)}
+
+$\phi_\text{SLM} = [l\arctan(y/x)]\bmod 2\pi$ for non-integer
+$l = n+\varepsilon$. The branch cut along $+x$ generates a chain of
+unit-charge vortices (Berry 2004), not a single fractional-charge singularity.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_3/figures/fig2_fractional_intensity.png}
+  \caption{Focal intensity: symmetric doughnut at integer $l$,
+    asymmetric ring with gap at fractional $l$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \includegraphics[width=\linewidth]{prob11_3/figures/fig3_fractional_phase_vortices.png}
+  \caption{Focal-field phase: unit-vortex chain along branch cut.}
+\end{subfigure}
+\caption{\textbf{Problem 11.3.} Fractional vortex structure (Berry 2004).
+  Cyan $+$: charge-$+1$ vortex; red $\times$: charge-$-1$ vortex.}
+\end{figure}
+
+\widefig{0.97}{prob11_3/figures/fig4_eps_sweep.png}{%
+  \textbf{Problem 11.3.} Sweep $l=1+\varepsilon$, $\varepsilon\in[0,1]$.
+  Vortices appear near centre at small $\varepsilon$ and migrate outward.}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\linewidth]{prob11_3/figures/fig5_vortex_count_vs_eps.png}
+\caption{\textbf{Problem 11.3.} Detected vortex count vs $\varepsilon$.
+  Consistent with Leach et al.\ (2004) and Lee et al.\ (2004).}
+\end{figure}
+
+\section{Summary}
+
+\begin{center}
+\small
+\begin{tabular}{p{3.2cm}p{5.2cm}p{2.2cm}p{3cm}}
+\toprule
+Exercise & Key result & Grid & Script \\
+\midrule
+11.2.1--11.2.10 & Phase masks, RM, SGL, weighted & $512^2$ & earlier chat \\
+11.2.11 GS & $u=1$, $\sigma=0$ in 60\,iter & $1000^2$ & \texttt{gs\_algorithm.py} \\
+11.2.12 Sparse GS & FFT faster at $N=100$ & $1000^2$ & \texttt{gs\_sparse.py} \\
+11.2.13 WGS & Uniformity via $\alpha$-rescaling & $1000^2$ & \texttt{gs\_weighted.py} \\
+11.2.14 3D GS & Multi-plane via Fresnel sum & $256^2$ & \texttt{gs\_3d.py} \\
+11.2.15 AA & $a\!\geq\!0.5$ matches GS at 60\,iter & $1000^2$ & \texttt{aa\_algorithm.py} \\
+11.2.16 DS & 94\% recovery (Cizmar 2010) & $256^2$ & \texttt{ds\_optimal\_focus.py} \\
+11.2.17 Zernike & Strehl $0.215\!\to\!1.000$ & $1000^2$ & \texttt{zernike\_correction.py} \\
+11.3.1 LG & Doughnut: $l\varphi+\pi\Theta\{L_p^{|l|}\}$ & $1000^2$ & \texttt{lg\_beams.py} \\
+11.3.2 HG & Binary $\pi$-mask & $1000^2$ & \texttt{hg\_beams.py} \\
+11.3.4 Counter-rot. & SGL + $\pm l$ & $1000^2$ & \texttt{counter\_rotating\_traps.py} \\
+11.4.1 Cont.\ GS & Ring/lemniscate/cross/$\phi$ & $1000^2/256^2$ & \texttt{continuous\_gs.py} \\
+11.4.2 Proof & $\Delta C\leq0$ (0 violations) & $1000^2$ & \texttt{gs\_convergence\_proof.py} \\
+11.4.3 Cont.\ AA & GS wins for continuous & $1000^2/256^2$ & \texttt{continuous\_aa.py} \\
+P11.1 GA & GS 17$\times$ faster & $1000^2$ & \texttt{genetic\_algorithm.py} \\
+P11.2 Vortex pair & Charge conserved & $600^2$ & \texttt{optical\_vortex\_pair.py} \\
+P11.3 Frac.\ vortex & Unit-vortex chain & $1000^2$ & \texttt{fractional\_vortex.py} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{References}
+
+\begin{enumerate}[leftmargin=*, label={[\arabic*]}]
+  \item P.~H.~Jones, O.~M.~Maragò, G.~Volpe,
+    \textit{Optical Tweezers: Principles and Applications},
+    Cambridge University Press, 2015.
+  \item T.~Cizmar et al.,
+    ``In situ wavefront correction,''
+    \textit{Nature Photonics} \textbf{4}, 388, 2010.
+  \item M.~V.~Berry,
+    ``Optical vortices evolving from helicoidal phase steps,''
+    \textit{J.~Opt.~A} \textbf{6}, 259, 2004.
+  \item J.~Leach et al., \textit{New J.~Phys.} \textbf{7}, 55, 2004.
+  \item W.~M.~Lee et al., \textit{Opt.~Lett.} \textbf{29}, 2467, 2004.
+  \item H.~H.~Bauschke, J.~M.~Borwein,
+    \textit{SIAM Review} \textbf{38}(3), 367, 1996.
+\end{enumerate}
+
+\end{document}

@@ -1,0 +1,345 @@
+"""
+Exercise 11.2.14
+Gerchberg-Saxton extended to 3D trapping geometries.
+
+Reference: Jones, Maragò & Volpe, Optical Tweezers: Principles and Applications, Ch. 7
+Notes: SSPC 2026, Sneha Chakrabarti
+
+Part A: Multi-plane GS
+----------------------
+Target: P axial planes, each with its own 2D intensity pattern.
+
+Algorithm (per iteration, Section 7.2 of theory notes):
+  For each plane p (at defocus z_p):
+    1. Propagate SLM field to plane p:
+       E_p = IFFT[ FFT(SLM_field) * H_p ]
+       where H_p(fx, fy) = exp(i pi z_p lambda (fx^2 + fy^2))
+       is the Fresnel propagator transfer function (paraxial, in normalised
+       spatial-frequency units fx = kx / (2pi/lambda f), fy = ky/(2pi/lambda f)).
+    2. Replace amplitude at plane p: E_p_corrected = A_target_p * exp(i phase(E_p))
+    3. Back-propagate: SLM_back_p = IFFT[ FFT(E_p_corrected) * conj(H_p) ]
+
+  Sum contributions from all planes at the SLM:
+    SLM_back = sum_p SLM_back_p
+
+  Apply SLM amplitude constraint and extract phase.
+
+Part B: Generalised 3D field shaping
+--------------------------------------
+When traps are distributed continuously in 3D (not just on discrete planes),
+replace the discrete plane sum with a volume integral sampled on a 3D grid.
+Each voxel contributes to the hologram via its Fresnel propagator. This is
+the full 3D generalisation; computationally heavy but conceptually identical.
+Here we demonstrate with a small 3D voxel grid.
+
+Fresnel propagator (transfer function form)
+-------------------------------------------
+For propagation distance z from the lens focal plane:
+
+    H(fx, fy; z) = exp(i pi lambda z (fx^2 + fy^2))
+
+where spatial frequencies are in cycles per pixel:
+    fx = kx_pixel / Mx,   fy = ky_pixel / My
+and lambda_eff = lambda / (pixel_size^2 / (lambda * f)) collapses to a
+single numerical parameter delta_z = z / (Mx * pixel_pitch^2 / lambda / f).
+In our normalised units we parameterise defocus by a dimensionless z_norm
+such that z_norm = 1 corresponds to one Rayleigh-range equivalent shift.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "ex11_2_11"))
+from gs_algorithm import gaussian_laser, make_trap_mask, trap_intensities, metrics
+
+rng = np.random.default_rng(42)
+
+# ── grid parameters ───────────────────────────────────────────────────────────
+# The standard 2D benchmark is 1000×1000 with N=100 traps at z=0.
+# 3D GS requires one full FFT per target plane per iteration. At 1000×1000
+# with P=3 planes and 50 iterations that is 300 FFT pairs plus P×Mx×My
+# back-propagated field accumulations, which becomes very slow on CPU.
+# We use 256×256 here to keep runtimes tractable while demonstrating the
+# algorithm correctly. The convergence behaviour and Fresnel propagator
+# structure are identical at any grid size.
+Mx, My  = 256, 256
+N_ITER  = 50
+LASER_W = 100
+MARGIN  = 0.25
+FIGURES = Path(__file__).parent / "figures"
+FIGURES.mkdir(exist_ok=True)
+
+
+# ── Fresnel propagator ────────────────────────────────────────────────────────
+
+def fresnel_tf(Mx, My, z_norm):
+    """
+    Transfer function for Fresnel propagation (paraxial, normalised units).
+
+    z_norm = 0 -> no propagation (identity).
+    z_norm != 0 -> defocus phase ramp in Fourier space.
+
+    H(kx, ky) = exp(i * pi * z_norm * (kx^2 + ky^2))
+    where kx, ky are integer wavenumbers in [-M/2, M/2).
+    """
+    kx = np.fft.fftfreq(Mx, d=1.0) * Mx   # integer wavenumbers
+    ky = np.fft.fftfreq(My, d=1.0) * My
+    KX, KY = np.meshgrid(kx, ky, indexing='ij')
+    H = np.exp(1j * np.pi * z_norm * (KX**2 + KY**2) / (Mx * My))
+    return H
+
+
+def propagate_to_plane(slm_field, z_norm):
+    """
+    Forward Fresnel propagation from SLM to a plane at normalised defocus z_norm.
+    Returns the focal field at that plane.
+    """
+    SLM_k = np.fft.fft2(slm_field)
+    H     = fresnel_tf(slm_field.shape[0], slm_field.shape[1], z_norm)
+    return np.fft.fftshift(np.fft.ifft2(SLM_k * H))
+
+
+def back_propagate(E_corrected, z_norm):
+    """
+    Back-propagation from a target plane to the SLM plane (conjugate of forward).
+    """
+    E_k = np.fft.ifft2(np.fft.ifftshift(E_corrected))
+    H   = fresnel_tf(E_corrected.shape[0], E_corrected.shape[1], z_norm)
+    return np.fft.ifft2(E_k * np.conj(H)) * (Mx * My)
+
+
+# ── multi-plane GS ────────────────────────────────────────────────────────────
+
+def multiplane_gs(laser_amp, plane_configs, n_iter, seed_phase=None):
+    """
+    Multi-plane GS algorithm.
+
+    Parameters
+    ----------
+    laser_amp    : (Mx, My) SLM amplitude
+    plane_configs: list of dicts, one per target plane:
+                   {'z_norm': float,
+                    'trap_coords': (Np, 2) int array,
+                    'I_target': float or (Np,) array}
+    n_iter       : iterations
+    seed_phase   : initial SLM phase
+
+    Returns
+    -------
+    slm_phase : (Mx, My)
+    history   : per-plane per-iteration metrics
+    """
+    Mx, My = laser_amp.shape
+    P      = len(plane_configs)
+
+    if seed_phase is None:
+        seed_phase = rng.uniform(0, 2 * np.pi, (Mx, My))
+
+    slm_field = laser_amp * np.exp(1j * seed_phase)
+
+    history = {p: {k: [] for k in ['u', 'sigma']} for p in range(P)}
+
+    for it in range(n_iter):
+        slm_back_sum = np.zeros((Mx, My), dtype=complex)
+
+        for p, cfg in enumerate(plane_configs):
+            z_norm      = cfg['z_norm']
+            coords      = cfg['trap_coords']
+            I_tgt_vals  = cfg['I_target']
+
+            if np.isscalar(I_tgt_vals):
+                A_tgt = np.full(len(coords), np.sqrt(float(I_tgt_vals)))
+            else:
+                A_tgt = np.sqrt(np.asarray(I_tgt_vals, dtype=float))
+
+            # 1. forward propagate to plane p
+            E_p = propagate_to_plane(slm_field, z_norm)
+
+            # record
+            I_traps = trap_intensities(E_p, coords)
+            _, _, u, sigma = metrics(I_traps)
+            history[p]['u'].append(u)
+            history[p]['sigma'].append(sigma)
+
+            # 2. replace amplitude at trap sites
+            E_p_corr = E_p.copy()
+            phase_p  = np.angle(E_p)
+            for i, (px, py) in enumerate(coords):
+                E_p_corr[px, py] = A_tgt[i] * np.exp(1j * phase_p[px, py])
+
+            # 3. back-propagate and accumulate
+            slm_back_sum += back_propagate(E_p_corr, z_norm)
+
+        # 4. apply laser amplitude constraint
+        slm_field = laser_amp * np.exp(1j * np.angle(slm_back_sum))
+
+    return np.angle(slm_field), history
+
+
+# ── generalised 3D GS (voxel version) ────────────────────────────────────────
+
+def gs_3d(laser_amp, voxel_positions, I_target_vol, n_iter, seed_phase=None):
+    """
+    Generalised 3D GS: traps at arbitrary (x, y, z_norm) positions.
+
+    voxel_positions : (K, 3) array, columns (px, py, z_norm)
+    I_target_vol    : (K,) target intensity at each voxel
+
+    Each voxel is treated as a plane with a single trap.
+    The back-propagated contributions from all K voxels are summed.
+    """
+    Mx, My = laser_amp.shape
+    K      = len(voxel_positions)
+    A_tgt  = np.sqrt(np.asarray(I_target_vol, dtype=float))
+
+    if seed_phase is None:
+        seed_phase = rng.uniform(0, 2 * np.pi, (Mx, My))
+
+    slm_field = laser_amp * np.exp(1j * seed_phase)
+    history   = {k: [] for k in ['u', 'sigma']}
+
+    for _ in range(n_iter):
+        slm_back = np.zeros((Mx, My), dtype=complex)
+        I_vox    = np.zeros(K)
+
+        for k, (px, py, z) in enumerate(voxel_positions):
+            px, py = int(px), int(py)
+            E_plane = propagate_to_plane(slm_field, z)
+            I_vox[k] = np.abs(E_plane[px, py])**2
+
+            # correct single voxel
+            E_corr       = np.zeros_like(E_plane)
+            E_corr[px, py] = A_tgt[k] * np.exp(1j * np.angle(E_plane[px, py]))
+            slm_back    += back_propagate(E_corr, z)
+
+        _, _, u, sigma = metrics(I_vox)
+        history['u'].append(u)
+        history['sigma'].append(sigma)
+
+        slm_field = laser_amp * np.exp(1j * np.angle(slm_back))
+
+    return np.angle(slm_field), history
+
+
+# ── run and plot ──────────────────────────────────────────────────────────────
+
+def run_and_plot():
+    laser_amp = gaussian_laser(Mx, My, LASER_W)
+
+    # Part A: 3 planes, each with a 3x3 trap lattice at different defocus
+    z_planes    = [-0.05, 0.0, 0.05]
+    n_side      = 3
+    margin      = 0.25
+
+    plane_configs = []
+    for z in z_planes:
+        coords = make_trap_mask(Mx, My, N_side=n_side, margin=margin)
+        plane_configs.append({
+            'z_norm':      z,
+            'trap_coords': coords,
+            'I_target':    1.0 / len(coords),
+        })
+
+    print("Multi-plane GS (3 planes x 9 traps)...")
+    slm_phase_mp, hist_mp = multiplane_gs(laser_amp, plane_configs, N_ITER)
+
+    iters = np.arange(1, N_ITER + 1)
+    colors = ['steelblue', 'tomato', 'seagreen']
+
+    # ── Figure 1: multi-plane convergence ────────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig.suptitle("Multi-Plane GS: Convergence per Plane (Ex 11.2.14a)", fontsize=13)
+
+    for ax, key, ylabel in [
+        (axes[0], 'u',     r'Uniformity $u$'),
+        (axes[1], 'sigma', r'$\sigma$ (%)'),
+    ]:
+        for p, (z, col) in enumerate(zip(z_planes, colors)):
+            ax.plot(iters, hist_mp[p][key], lw=1.8, color=col,
+                    label=rf'Plane $z_\mathrm{{norm}}={z}$')
+        ax.set_xlabel("Iteration", fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fig.savefig(FIGURES / "fig1_multiplane_convergence.png", dpi=150)
+    plt.close(fig)
+
+    # ── Figure 2: focal intensity at each plane ───────────────────────────────
+    slm_field_mp = laser_amp * np.exp(1j * slm_phase_mp)
+    fig, axes    = plt.subplots(1, 3, figsize=(12, 4))
+    fig.suptitle("Multi-Plane GS: Intensity at Each Target Plane", fontsize=12)
+
+    for ax, cfg, col, z in zip(axes, plane_configs, colors, z_planes):
+        E_p     = propagate_to_plane(slm_field_mp, z)
+        I_p     = np.abs(E_p)**2
+        log_I   = np.log1p(I_p / I_p.max() * 1e4)
+        ax.imshow(log_I.T, cmap='inferno', origin='lower')
+        ax.scatter(cfg['trap_coords'][:, 0], cfg['trap_coords'][:, 1],
+                   s=20, c='cyan', marker='x', linewidths=1.0)
+        ax.set_title(rf"$z_\mathrm{{norm}} = {z}$", fontsize=11)
+        ax.set_xlabel("x (pixel)")
+        ax.set_ylabel("y (pixel)")
+
+    plt.tight_layout()
+    fig.savefig(FIGURES / "fig2_multiplane_focal_fields.png", dpi=150)
+    plt.close(fig)
+
+    # ── Part B: generalised 3D — 8 traps on cube vertices ────────────────────
+    cx, cy  = Mx // 2, My // 2
+    delta_r = Mx // 8
+    delta_z = 0.04
+
+    cube_voxels = np.array([
+        [cx + sx * delta_r, cy + sy * delta_r, sz * delta_z]
+        for sx in [-1, 1]
+        for sy in [-1, 1]
+        for sz in [-1, 1]
+    ], dtype=float)   # (8, 3)
+
+    I_tgt_3d = np.full(len(cube_voxels), 1.0 / len(cube_voxels))
+
+    print("Generalised 3D GS (8-trap cube)...")
+    slm_phase_3d, hist_3d = gs_3d(
+        laser_amp, cube_voxels, I_tgt_3d, n_iter=30
+    )
+
+    # ── Figure 3: 3D GS convergence ──────────────────────────────────────────
+    iters_3d = np.arange(1, 31)
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+    fig.suptitle("Generalised 3D GS: Cube of 8 Traps (Ex 11.2.14b)", fontsize=13)
+
+    for ax, key, ylabel in [
+        (axes[0], 'u',     r'Uniformity $u$'),
+        (axes[1], 'sigma', r'$\sigma$ (%)'),
+    ]:
+        ax.plot(iters_3d, hist_3d[key], lw=1.8, color='darkorchid')
+        ax.set_xlabel("Iteration", fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fig.savefig(FIGURES / "fig3_gs3d_convergence.png", dpi=150)
+    plt.close(fig)
+
+    # ── Figure 4: 3D trap positions visualised ────────────────────────────────
+    fig = plt.figure(figsize=(6, 5))
+    ax  = fig.add_subplot(111, projection='3d')
+    ax.scatter(cube_voxels[:, 0], cube_voxels[:, 1], cube_voxels[:, 2],
+               s=80, c='darkorchid', marker='o', depthshade=True)
+    ax.set_xlabel("x (pixel)")
+    ax.set_ylabel("y (pixel)")
+    ax.set_zlabel(r"$z_\mathrm{norm}$")
+    ax.set_title("3D trap geometry: cube vertices", fontsize=11)
+    plt.tight_layout()
+    fig.savefig(FIGURES / "fig4_3d_trap_geometry.png", dpi=150)
+    plt.close(fig)
+
+    print("\nFigures saved to", FIGURES)
+
+
+if __name__ == "__main__":
+    run_and_plot()
